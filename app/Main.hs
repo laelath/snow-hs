@@ -81,7 +81,8 @@ runApp rows cols = do
       gen <- newStdGen
       let new = runStateGen_ gen randomFlakes
       mapM_ clearPos upds
-      mapM_ render $ new ++ flakes'
+      mapM_ render $ new ++ filter (\f -> flakePos f `elem` upds) flakes'
+      setCursorPosition 0 0
       hFlush stdout
       threadDelay updateDelay
       dWind <- randomRIO (-1.0, 1.0)
