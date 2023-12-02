@@ -47,18 +47,19 @@ render (Snowflake ft x y _ _ _ _ : rest) = do
 
 runApp :: Int -> Int -> IO ()
 runApp rows cols = do
-  go []
+  go 0 []
   where
-    go flakes = do
-      let (upds, flakes') = update flakes
+    go wind flakes = do
+      let (upds, flakes') = update ((sin wind) / 10) flakes
       mapM_ (\(x, y) -> setCursorPosition x y >> putChar ' ') upds
       render $ filter (\f -> flakePos f `elem` upds) flakes'
       gen <- newStdGen
-      let new = fst $ runStateGen gen randomFlakes
+      let new = runStateGen_ gen randomFlakes
       render new
       hFlush stdout
       threadDelay 10000
-      go $ new ++ flakes'
+      dWind <- randomRIO (-pi/1000, pi/1000)
+      go (wind + dWind) $ new ++ flakes'
 
     randomFlakes :: StatefulGen g m => g -> m [Snowflake]
     randomFlakes g = do
@@ -79,41 +80,34 @@ runApp rows cols = do
       dy <- uniformRM (-0.02, 0.02) g
       return $ Snowflake ft 0 y ax ay dx dy
 
-    update :: [Snowflake] -> ([(Int, Int)], [Snowflake])
-    update = foldr updates ([], [])
+    update :: Float -> [Snowflake] -> ([(Int, Int)], [Snowflake])
+    update wind = foldr updates ([], [])
       where
-        updates f (upds, fs) =
-          case updateFlake f of
-            Nothing -> (flakePos f : upds, fs)
-            Just f'
-              | fxy == fxy' -> (upds, f' : fs)
-              | otherwise -> (fxy : fxy' : upds, f' : fs)
-              where
-                fxy = flakePos f
-                fxy' = flakePos f'
+        updates f (upds, fs)
+          | x' < 0 || x' >= rows = (fxy : upds, fs)
+          | fxy == fxy' = (upds, f' : fs)
+          | otherwise = (fxy : fxy' : upds, f' : fs)
+          where
+            f' = moveFlake wind f
+            fxy = flakePos f
+            fxy' = flakePos f'
+            x' = fst fxy'
 
-    updateFlake :: Snowflake -> Maybe Snowflake
-    updateFlake f =
-      if x < 0 || x >= rows
-      then Nothing
-      else Just $ Snowflake ft x (y `mod` cols) ax ay dx dy
-      where
-        Snowflake ft x y ax ay dx dy = moveFlake f
-
-    moveFlake :: Snowflake -> Snowflake
-    moveFlake (Snowflake ft x y ax ay dx dy)
+    moveFlake :: Float -> Snowflake -> Snowflake
+    moveFlake wind (Snowflake ft x y ax ay dx dy)
       | abs dx >= abs dy && abs ax' >= 1 =
-        Snowflake ft x' y' ax'' ay'' dx dy
+        Snowflake ft x' y' ax'' ay'' dx dy'
       | abs dy >= abs dx && abs ay' >= 1 =
-        Snowflake ft x' y' ax'' ay'' dx dy
-      | otherwise = Snowflake ft x y ax' ay' dx dy
+        Snowflake ft x' y' ax'' ay'' dx dy'
+      | otherwise = Snowflake ft x y ax' ay' dx dy'
       where
         ax' = ax + dx
         ay' = ay + dy
         x' = x + truncate ax'
-        y' = y + truncate ay'
+        y' = (y + truncate ay') `mod` cols
         ax'' = ax' - fromIntegral (truncate ax' :: Int)
         ay'' = ay' - fromIntegral (truncate ay' :: Int)
+        dy' = (9 * dy + wind) / 10
 
 
 
