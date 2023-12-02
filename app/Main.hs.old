@@ -1,0 +1,248 @@
+module Main where
+
+import Control.Concurrent
+import Control.Exception
+import Data.Array.IO
+import System.Console.ANSI
+import System.IO(hFlush, stdout)
+import System.Random
+
+data FlakeType = Flake1 | Flake2 | Flake3
+
+instance Show FlakeType where
+  show Flake1 = "❄"
+  show Flake2 = "❅"
+  show Flake3 = "❆"
+
+data PileHeight =
+    Pile1 | Pile2 | Pile3 | Pile4
+  | Pile5 | Pile6 | Pile7 | Pile8
+  deriving (Eq, Ord)
+
+instance Show PileHeight where
+  show Pile1 = "▁"
+  show Pile2 = "▂"
+  show Pile3 = "▃"
+  show Pile4 = "▄"
+  show Pile5 = "▅"
+  show Pile6 = "▆"
+  show Pile7 = "▇"
+  show Pile8 = "█"
+
+incPile :: PileHeight -> Maybe PileHeight
+incPile Pile1 = Just Pile2
+incPile Pile2 = Just Pile3
+incPile Pile3 = Just Pile4
+incPile Pile4 = Just Pile5
+incPile Pile5 = Just Pile6
+incPile Pile6 = Just Pile7
+incPile Pile7 = Just Pile8
+incPile Pile8 = Nothing
+
+data Cell =
+    Empty
+  | Snowflake FlakeType Float Float Float Float
+  | SnowPile PileHeight
+
+instance Show Cell where
+  show Empty = " "
+  show (Snowflake ft _ _ _ _) = show ft
+  show (SnowPile ph) = show ph
+
+data Region = Region
+  { rCenter :: Cell
+  , rDown :: Cell
+  , rLeft :: Cell
+  , rRight :: Cell
+  , rDownLeft :: Cell
+  , rDownRight :: Cell
+  }
+
+data Move =
+    NoMove | MoveDown
+  | MoveLeft | MoveRight
+  | MoveDownLeft | MoveDownRight
+
+update :: Region -> Region
+update r =
+  case rCenter r of
+    Empty -> r
+    SnowPile _ -> r
+    Snowflake ft dx dy sx sy ->
+      doMove move
+      where
+        sx' = sx + dx
+        sy' = sy + dy
+
+        move
+          | sx' > 1.0 && sy' > 1.0 = MoveDownRight
+          | sy' > 1.0 = MoveRight
+          | sx' > 1.0 && sy' < -1.0 = MoveDownLeft
+          | sy' < -1.0 = MoveLeft
+          | sx' > 1.0 = MoveDown
+          | otherwise = NoMove
+
+        noMove = r { rCenter = Snowflake ft dx dy sx' sy' }
+
+        moveDown = r { rCenter = Empty, rDown = Snowflake ft dx dy (sx' - 1.0) sy' }
+        moveDownRight = r { rCenter = Empty, rDownRight = Snowflake ft dx dy (sx' - 1.0) (sy' - 1.0) }
+        moveDownLeft = r { rCenter = Empty, rDownLeft = Snowflake ft dx dy (sx' - 1.0) (sy' + 1.0) }
+
+        landDown h =
+          case incPile h of
+            Nothing -> r { rCenter = SnowPile Pile1 }
+            Just h' -> r { rCenter = Empty, rDown = SnowPile h' }
+
+        landDownLeft h =
+          case incPile h of
+            Nothing -> undefined
+            Just h' -> r { rCenter = Empty, rDownLeft = SnowPile h' }
+
+        landDownRight h =
+          case incPile h of
+            Nothing -> undefined
+            Just h' -> r { rCenter = Empty, rDownRight = SnowPile h' }
+
+        doMove MoveDown =
+          case rDown r of
+            Empty -> moveDown
+            SnowPile h -> 
+              case (rDownLeft r, rDownRight r) of
+                (Empty, Empty)
+                  | sy' > 0.0 -> moveDownRight
+                  | otherwise -> moveDownLeft
+                (_, Empty) -> moveDownRight
+                (Empty, _) -> moveDownLeft
+                (SnowPile hl, SnowPile hr)
+                  | h <= hl && h <= hr -> landDown h
+                  | hl < hr -> landDownLeft hl
+                  | hr < hl -> landDownRight hr
+                  | sy' > 0.0 -> landDownRight hr
+                  | otherwise -> landDownLeft hl
+                _ -> noMove
+            Snowflake _ _ _ _ _ -> noMove
+        doMove _ = noMove
+
+runApp :: Int -> Int -> IO ()
+runApp rows cols = do
+  arr <- newArray (0, rows*cols-1) Empty
+  writeSnowArray arr 0 20 (Snowflake Flake1 1.0 0.0 0.0 0.1)
+  go arr
+  where
+    randRow :: IO Int
+    randRow = getStdRandom (randomR (0, rows - 1))
+
+    randCol :: IO Int
+    randCol = getStdRandom (randomR (0, cols - 1))
+
+    readSnowArray :: (IOArray Int Cell) -> Int -> Int -> IO Cell
+    readSnowArray arr row col =
+      if row == rows
+      then return $ SnowPile Pile8
+      else do
+        setCursorPosition row col'
+        putStr "*"
+        hFlush stdout
+        readArray arr $ col' * rows + row
+      where
+        col' = col `mod` cols
+
+    writeSnowArray :: (IOArray Int Cell) -> Int -> Int -> Cell -> IO ()
+    writeSnowArray arr row col c =
+      if row == rows
+      then mempty
+      else writeArray arr (col' * rows + row) c
+      where
+        col' = col `mod` cols
+
+    putRegion :: (IOArray Int Cell) -> Region -> Int -> Int -> IO ()
+    putRegion arr r row col = do
+      writeSnowArray arr row (col-1) (rLeft r)
+      writeSnowArray arr row col (rCenter r)
+      writeSnowArray arr row (col+1) (rRight r)
+      writeSnowArray arr (row+1) (col-1) (rDownLeft r)
+      writeSnowArray arr (row+1) col (rDown r)
+      writeSnowArray arr (row+1) (col+1) (rDownRight r)
+
+    getRegion :: (IOArray Int Cell) -> Int -> Int -> IO Region
+    getRegion arr row col = do
+      left <- readSnowArray arr row (col-1)
+      center <- readSnowArray arr row col
+      right <- readSnowArray arr row (col+1)
+      downLeft <- readSnowArray arr (row+1) (col-1)
+      down <- readSnowArray arr (row+1) col
+      downRight <- readSnowArray arr (row+1) (col+1)
+      return $
+        Region { rCenter = center, rLeft = left, rRight = right
+               , rDown = down, rDownLeft = downLeft, rDownRight = downRight }
+
+    writeRegion :: Region -> Int -> Int -> IO ()
+    writeRegion r row col
+      | col == 0 = do
+          setCursorPosition row col
+          putStr $ show (rCenter r) ++ show (rRight r)
+          setCursorColumn (cols-1)
+          putStr $ show (rLeft r)
+          if row < rows - 1
+          then do
+            setCursorPosition (row+1) col
+            putStr $ show (rDown r) ++ show (rDownRight r)
+            setCursorColumn (cols-1)
+            putStr $ show (rDownLeft r)
+          else mempty
+      | col == cols - 1 = do
+          setCursorPosition row 0
+          putStr $ show (rRight r)
+          setCursorColumn (col-1)
+          putStr $ show (rLeft r) ++ show (rCenter r)
+          if row < rows - 1
+          then do
+            setCursorPosition (row+1) 0
+            putStr $ show (rDownRight r)
+            setCursorColumn (col-1)
+            putStr $ show (rDownLeft r) ++ show (rDown r)
+          else mempty
+      | otherwise = do
+          setCursorPosition row (col-1)
+          putStr $ show (rLeft r) ++ show (rCenter r) ++ show (rRight r)
+          if row < rows - 1
+          then do
+            setCursorPosition (row+1) (col-1)
+            putStr $ show (rDownLeft r) ++ show (rDown r) ++ show (rDownRight r)
+          else mempty
+
+    go :: IOArray Int Cell -> IO ()
+    go arr = do
+      --mapM_ (\(row, col) -> do
+      --         r <- getRegion arr row col
+      --         let r' = update r
+      --         putRegion arr r' row col
+      --         writeRegion r' row col)
+      --      [ (rows - x, y) | x <- [1..rows], y <- [0..cols-1] ]
+      row <- randRow
+      col <- randCol
+      r <- getRegion arr row col
+      let r' = update r
+      putRegion arr r' row col
+      writeRegion r' row col
+      hFlush stdout
+      threadDelay 10
+      go arr
+
+setup :: IO ()
+setup = do
+  hideCursor
+  useAlternateScreenBuffer
+  hFlush stdout
+
+teardown :: IO ()
+teardown = do
+  useNormalScreenBuffer
+  showCursor
+  hFlush stdout
+
+main :: IO ()
+main = do
+  Just (rows, cols) <- getTerminalSize
+  bracket_ setup teardown $
+           runApp rows cols
