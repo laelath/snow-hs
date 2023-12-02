@@ -2,8 +2,6 @@ module Main where
 
 import Control.Concurrent
 import Control.Exception
-import Control.Monad
-import Data.Maybe
 import System.Console.ANSI
 import System.IO(hFlush, stdout)
 import System.Random
@@ -37,6 +35,9 @@ instance Show PileHeight where
 
 data Snowflake = Snowflake FlakeType Int Int Float Float Float Float
 
+flakePos :: Snowflake -> (Int, Int)
+flakePos (Snowflake _ x y _ _ _ _) = (x, y)
+
 render :: [Snowflake] -> IO ()
 render [] = mempty
 render (Snowflake ft x y _ _ _ _ : rest) = do
@@ -49,18 +50,20 @@ runApp rows cols = do
   go []
   where
     go flakes = do
-      clearScreen
-      render flakes
-      hFlush stdout
-      threadDelay 10000
+      let (upds, flakes') = update flakes
+      mapM_ (\(x, y) -> setCursorPosition x y >> putChar ' ') upds
+      render $ filter (\f -> flakePos f `elem` upds) flakes'
       gen <- newStdGen
       let new = fst $ runStateGen gen randomFlakes
-      go $ new ++ update flakes
+      render new
+      hFlush stdout
+      threadDelay 10000
+      go $ new ++ flakes'
 
     randomFlakes :: StatefulGen g m => g -> m [Snowflake]
     randomFlakes g = do
       n <- uniformRM (0 :: Float, 1) g
-      if n > 0.75
+      if n > 0.9
       then do
         f <- randomFlake g
         return [f]
@@ -76,8 +79,18 @@ runApp rows cols = do
       dy <- uniformRM (-0.02, 0.02) g
       return $ Snowflake ft 0 y ax ay dx dy
 
-    update :: [Snowflake] -> [Snowflake]
-    update = mapMaybe updateFlake
+    update :: [Snowflake] -> ([(Int, Int)], [Snowflake])
+    update = foldr updates ([], [])
+      where
+        updates f (upds, fs) =
+          case updateFlake f of
+            Nothing -> (flakePos f : upds, fs)
+            Just f'
+              | fxy == fxy' -> (upds, f' : fs)
+              | otherwise -> (fxy : fxy' : upds, f' : fs)
+              where
+                fxy = flakePos f
+                fxy' = flakePos f'
 
     updateFlake :: Snowflake -> Maybe Snowflake
     updateFlake f =
