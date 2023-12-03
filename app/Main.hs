@@ -17,7 +17,7 @@ updateDelaySecs :: Float
 updateDelaySecs = fromIntegral updateDelay / 1000000.0
 
 flakeRate :: Float
-flakeRate = 0.05
+flakeRate = 0.075
 
 windDrag :: Float
 windDrag = 10.0 * updateDelaySecs
@@ -54,22 +54,39 @@ render (Snowflake ft x y _ _ _ _) = do
   setCursorPosition x y
   putStr $ show ft
 
-renderPile :: Int -> Int -> Int -> IO ()
-renderPile rows col height =
-  go (min (rows * 8) height) (rows-1)
+pileChar :: Int -> Char
+pileChar 1 = '▁'
+pileChar 2 = '▂'
+pileChar 3 = '▃'
+pileChar 4 = '▄'
+pileChar 5 = '▅'
+pileChar 6 = '▆'
+pileChar 7 = '▇'
+pileChar n
+  | n <= 0 = ' '
+  | otherwise = '█'
+
+renderPiles :: Int -> Int -> Array Int Int -> Array Int Int -> IO ()
+renderPiles rows cols a b =
+  mapM_ renderPile [0..cols-1]
   where
-    go 0 _ = mempty
-    go 1 h = setCursorPosition h col >> putChar '▁'
-    go 2 h = setCursorPosition h col >> putChar '▂'
-    go 3 h = setCursorPosition h col >> putChar '▃'
-    go 4 h = setCursorPosition h col >> putChar '▄'
-    go 5 h = setCursorPosition h col >> putChar '▅'
-    go 6 h = setCursorPosition h col >> putChar '▆'
-    go 7 h = setCursorPosition h col >> putChar '▇'
-    go n h = do
-      setCursorPosition h col
-      putChar '█'
-      go (n-8) (h-1)
+    renderPile :: Int -> IO ()
+    renderPile col
+      | a ! col == b ! col = mempty
+      | otherwise = go botRow ((b ! col) - beneathBotRows)
+        where
+          bot = min (a ! col) (b ! col)
+          top = max (a ! col) (b ! col)
+          botRows = max 1 ((bot + 7) `div` 8)
+          botRow = rows - botRows
+          topRow = max 0 (rows - max 1 ((top + 7) `div` 8))
+          beneathBotRows = (botRows - 1) * 8
+          go row h
+            | row < topRow = mempty
+            | otherwise = do
+                setCursorPosition row col
+                putChar $ pileChar h
+                go (row-1) (h-8)
 
 clearPos :: (Int, Int) -> IO ()
 clearPos (x, y) = do
@@ -86,16 +103,21 @@ runApp rows cols = do
       let newPiles = smooth wind $ accum (+) piles $ map (\i -> (i,1)) lands
       gen <- newStdGen
       let new = runStateGen_ gen randomFlakes
-      mapM_ clearPos upds
-      mapM_ render $ new ++ filter (\f -> flakePos f `elem` upds) flakes'
-      mapM_ (\i -> renderPile rows i $ newPiles ! i) [0..cols-1]
+      let upds' = filter (not . collides newPiles) upds
+      mapM_ clearPos upds'
+      mapM_ render $ filter (not . collides newPiles . flakePos) new
+      mapM_ render $ filter (\f -> flakePos f `elem` upds') flakes'
+      renderPiles rows cols piles newPiles
       setCursorPosition 0 0
       hFlush stdout
-      threadDelay $ updateDelay
+      threadDelay updateDelay
       dWind <- randomRIO (-1.0, 1.0)
       go (pWind + dWind * windChangeRate)
          newPiles
          (new ++ flakes')
+
+    collides :: Array Int Int -> (Int, Int) -> Bool
+    collides a (x, y) = a ! y > 8 * (rows - 1 - x)
 
     smooth :: Float -> Array Int Int -> Array Int Int
     smooth wind a =
@@ -125,7 +147,7 @@ runApp rows cols = do
     randomFlake g = do
       ft <- uniformM g
       y  <- uniformRM (0, cols-1) g
-      ax <- uniformRM (0.0, 0.5) g
+      ax <- uniformRM (0, 0.5) g
       ay <- uniformRM (-1, 1) g
       dx <- flakeDropSpeed g
       dy <- uniformRM (-2.0, 2.0) g
