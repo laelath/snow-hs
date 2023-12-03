@@ -23,7 +23,7 @@ windDrag :: Float
 windDrag = 10.0 * updateDelaySecs
 
 windIntensity :: Float
-windIntensity = 10.0
+windIntensity = 7.0
 
 windChangeRate :: Float
 windChangeRate = 2*pi*updateDelaySecs / 5.0
